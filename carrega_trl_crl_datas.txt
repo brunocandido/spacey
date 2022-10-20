@@ -1,0 +1,125 @@
+def carrega_trl_crl_datas():
+    time_1 = time_start()
+    define_status('Erro')
+
+    df = pd.read_sql_query("SELECT * FROM entregas_marco", conn_map)
+
+    for s in ['data_lb', 'data_prevista', 'data_realizacao']:
+        # transforma uma data inválida em NaT (not a time)
+        df[s] = pd.to_datetime(df[s], errors='coerce')
+        df[s] = df[s].dt.strftime('%d/%m/%Y')
+
+    df = df[['id', 'entrega_id', 'tipo', 'data_lb',
+             'data_prevista', 'data_realizacao']]
+
+    # pega apenas os marcos de TRL e CRL
+    df = df[(df['tipo'] >= 2) & (df['tipo'] <= 19)]
+
+    # Passo 1: cria dataframe com as colunas TRL e CRL
+    new_df = pd.DataFrame()
+    df_final = pd.DataFrame()
+
+    for index, row in df.iterrows():  # percorre a lista de marcos
+
+        trl = 0
+        crl = 0
+        if row['tipo'] == 2:
+            trl = 1
+        elif row['tipo'] == 3:
+            trl = 2
+        elif row['tipo'] == 4:
+            trl = 3
+        elif row['tipo'] == 5:
+            trl = 4
+        elif row['tipo'] == 6:
+            trl = 5
+        elif row['tipo'] == 7:
+            trl = 6
+        elif row['tipo'] == 8:
+            trl = 7
+        elif row['tipo'] == 9:
+            trl = 8
+        elif row['tipo'] == 10:
+            trl = 9
+        elif row['tipo'] == 11:
+            crl = 1
+        elif row['tipo'] == 12:
+            crl = 2
+        elif row['tipo'] == 13:
+            crl = 3
+        elif row['tipo'] == 14:
+            crl = 4
+        elif row['tipo'] == 15:
+            crl = 5
+        elif row['tipo'] == 16:
+            crl = 6
+        elif row['tipo'] == 17:
+            crl = 7
+        elif row['tipo'] == 18:
+            crl = 8
+        elif row['tipo'] == 19:
+            crl = 9
+
+        dt_lb = None
+        dt_prv = None
+        dt_rlz = None
+        if pd.notnull(row['data_lb']):
+            dt_lb = pd.to_datetime(row['data_lb'], dayfirst=True)
+        if pd.notnull(row['data_prevista']):
+            dt_prv = pd.to_datetime(row['data_prevista'], dayfirst=True)
+        if pd.notnull(row['data_realizacao']):
+            dt_rlz = pd.to_datetime(row['data_realizacao'], dayfirst=True)
+
+        data = {'entrega_id': row['entrega_id'], 'trl': [trl], 'crl': [crl],
+                'dt_lb': [dt_lb], 'dt_prv': [dt_prv], 'dt_rlz': [dt_rlz]}
+
+        new_df = new_df.append(pd.DataFrame(data, index=[index]))
+
+    # Passo 2: agrupa new_df por entrega e data, montando os pares TRL x CRL
+    for dt in ['dt_lb', 'dt_prv', 'dt_rlz']:
+
+        df0 = new_df[['entrega_id', 'trl', 'crl', dt]]
+        df0 = df0.groupby(['entrega_id', dt]).max()
+        df0 = df0.reset_index().sort_values(by=['entrega_id', dt])
+
+        # print(df0.loc[df0['entrega_id']==9064])
+
+        # Passo 3: ajusta os TRLs e CRLs zerados
+        last_entrega = None
+        for idx, rw in df0.iterrows():
+
+            if last_entrega != rw['entrega_id']:
+                last_trl = None
+                last_crl = None
+
+            if rw['trl'] == 0:
+                df0.loc[idx, 'trl'] = last_trl
+            else:
+                last_trl = rw['trl']
+
+            if rw['crl'] == 0:
+                df0.loc[idx, 'crl'] = last_crl
+            else:
+                last_crl = rw['crl']
+
+            df0.loc[idx, 'tipo'] = dt
+
+            last_entrega = rw['entrega_id']
+
+        df_final = df_final.append(df0.rename(columns={dt: 'data'}))
+
+    df_final = df_final.sort_values(by=['entrega_id', 'tipo', 'data'])
+    df_final = df_final.reset_index(drop=True)
+    df_final['id'] = df_final.index+1
+
+    df_final = df_final[['id', 'entrega_id', 'data', 'tipo', 'trl', 'crl']]
+
+    # uses df value when condition is met. Otherwise, uses None.
+    df_final = df_final.where(df_final.notnull(), None)
+
+    sql = '''INSERT INTO TRL_CRL_DATAS (
+               TCDT_CD_TRL_CRL_DATAS, ENVA_CD_ENTREGA_VALOR, 
+               TCDT_DT_DATA, TCDT_CD_TIPO, TCDT_CD_TRL, TCDT_CD_CRL
+               ) VALUES (:1,:2,:3,:4,:5,:6)'''
+
+    insert_oracle(df_final, sql, time_1=time_1)
